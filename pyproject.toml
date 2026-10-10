@@ -1,0 +1,22 @@
+[project]
+name = "call-me-maybe"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "mohcine-jaad", email = "mohcine.jaad@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "llm-sdk",
+    "numpy>=2.2.6",
+    "pydantic>=2.14.0",
+]
+
+[tool.uv.workspace]
+members = [
+    "llm_sdk",
+]
+
+[tool.uv.sources]
+llm-sdk = { workspace = true }
