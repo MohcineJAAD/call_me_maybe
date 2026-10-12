@@ -1,3 +1,4 @@
-from llm_sdk import Small_LLM_Model
+from .cli import parse_args
 
-print("llm_sdk imported: ", Small_LLM_Model)
+args = parse_args()
+print(args)
