@@ -2,12 +2,27 @@
 
 import argparse
 
+from pydantic import BaseModel
 
-def parse_args() -> argparse.Namespace:
+
+class Config(BaseModel):
+    """Configuration model for command-line arguments.
+
+    Attributes:
+        functions_definition (str): Path to the functions definition JSON file.
+        input (str): Path to the input JSON file containing the prompts.
+        output (str): Path to the output JSON file where results will be saved.
+    """
+    functions_definition: str
+    input: str
+    output: str
+
+
+def parse_args() -> Config:
     """Parse command-line arguments.
 
     Returns:
-        parsed arguments
+        Config holding the three file paths
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -25,4 +40,9 @@ def parse_args() -> argparse.Namespace:
         default="data/output/function_calling_results.json",
         help="Path to the output JSON file where results will be saved"
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    return Config(
+        functions_definition=args.functions_definition,
+        input=args.input,
+        output=args.output
+    )
