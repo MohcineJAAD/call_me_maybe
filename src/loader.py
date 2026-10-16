@@ -60,4 +60,6 @@ def load_functions(file_path: str) -> list[FunctionDef]:
             functions.append(FunctionDef.model_validate(item))
         except ValidationError as e:
             raise ValueError(f"{file_path}: invalid data at index {i}: {e}")
+    if not functions:
+        raise ValueError(f"{file_path}: no functions defined")
     return functions

@@ -1,4 +1,4 @@
-"""Data module for the input JSON files."""
+"""Data models for the input and output JSON files."""
 
 from pydantic import BaseModel
 
@@ -19,3 +19,10 @@ class FunctionDef(BaseModel):
 class PromptItem(BaseModel):
     """One prompt from function_calling_tests.json."""
     prompt: str
+
+
+class FunctionCall(BaseModel):
+    """One result: a call to a function with its arguments."""
+    prompt: str
+    name: str
+    parameters: dict[str, str | int | float | bool]
