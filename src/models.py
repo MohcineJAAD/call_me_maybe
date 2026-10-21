@@ -1,11 +1,13 @@
 """Data models for the input and output JSON files."""
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
 class TypeSpec(BaseModel):
     """Type of a parameter or return value, e.g. {"type": "number"}."""
-    type: str
+    type: Literal["number", "string", "boolean", "integer"]
 
 
 class FunctionDef(BaseModel):

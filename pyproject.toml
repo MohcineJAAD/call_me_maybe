@@ -29,5 +29,5 @@ dev = [
 
 
 [tool.mypy]
-exclude = ["\\.venv", "^llm_sdk/"]
+exclude = ["\\.venv", "^llm_sdk/", "scratch_nbr.py", "scratch.py", "scrtch.py", "c3.py"]
 mypy_path = "llm_sdk"
