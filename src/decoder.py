@@ -1,5 +1,6 @@
 """Turn prompts into function calls."""
 
+import json
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
@@ -64,6 +65,14 @@ class Decoder(BaseModel):
     """
     model_config = ConfigDict(arbitrary_types_allowed=True)
     llm: Small_LLM_Model
+    token_bytes: list[bytes]
+    digit_mask: np.ndarray
+    string_mask: np.ndarray
+    quote_id: int
+    comma_id: int
+    close_id: int
+    minus_id: int
+    dot_id: int
 
     def encode(self, text: str) -> list[int]:
         """Encode a fixed piece of text into token IDs.
@@ -101,6 +110,52 @@ class Decoder(BaseModel):
         scores = np.full(len(logits), -np.inf)
         scores[:size_mask] = np.where(mask, logits[:size_mask], -np.inf)
         return int(np.argmax(scores))
+
+
+def load_decoder(llm: Small_LLM_Model) -> Decoder:
+    """Build every lookup table once and return a ready decoder.
+
+    Args:
+        llm: The loaded language model.
+
+    Returns:
+        The decoder, with the token table, masks and special IDs.
+    """
+    with open(llm.get_path_to_vocab_file(), encoding="utf-8") as f:
+        vocab = json.load(f)
+
+    to_byte = byte_decoder()
+    token_bytes = [b""] * (max(vocab.values()) + 1)
+    for written, token_id in vocab.items():
+        token_bytes[token_id] = bytes([to_byte[c] for c in written])
+    digit_mask = np.array([token.isdigit() for token in token_bytes])
+    allowed_in_string = []
+    for token in token_bytes:
+        if token == b"":
+            allowed_in_string.append(False)
+        elif b'"' in token:
+            allowed_in_string.append(False)
+        elif b"\n" in token or b"\r" in token:
+            allowed_in_string.append(False)
+        else:
+            allowed_in_string.append(True)
+    string_mask = np.array(allowed_in_string)
+    quote_id = vocab['"']
+    comma_id = vocab[","]
+    close_id = vocab["}"]
+    minus_id = vocab["-"]
+    dot_id = vocab["."]
+    return Decoder(
+        llm=llm,
+        token_bytes=token_bytes,
+        digit_mask=digit_mask,
+        string_mask=string_mask,
+        quote_id=quote_id,
+        comma_id=comma_id,
+        close_id=close_id,
+        minus_id=minus_id,
+        dot_id=dot_id
+    )
 
 
 def decode(prompt: PromptItem, functions: list[FunctionDef]) -> FunctionCall:
