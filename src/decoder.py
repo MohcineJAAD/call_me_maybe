@@ -111,6 +111,38 @@ class Decoder(BaseModel):
         scores[:size_mask] = np.where(mask, logits[:size_mask], -np.inf)
         return int(np.argmax(scores))
 
+    def generate_choice(
+            self,
+            ids: list[int],
+            options: list[str],
+            end_id: int
+    ) -> str:
+        """Let the model write one of the options, then the end token.
+
+        Args:
+            ids: Everything written so far (extended in place).
+            options: The allowed words (function names, true/false).
+            end_id: The token that closes the choice.
+
+        Returns:
+            The chosen option.
+        """
+        targets = [option.encode() for option in options]
+        written = b""
+        while True:
+            mask = np.zeros(len(self.token_bytes), dtype=bool)
+            for token_id, token in enumerate(self.token_bytes):
+                attempt = written + token
+                if token and any(t.startswith(attempt) for t in targets):
+                    mask[token_id] = True
+            if written in targets:
+                mask[end_id] = True
+            best = self.pick(ids, mask)
+            ids.append(best)
+            if best == end_id:
+                return written.decode()
+            written += self.token_bytes[best]
+
 
 def load_decoder(llm: Small_LLM_Model) -> Decoder:
     """Build every lookup table once and return a ready decoder.
