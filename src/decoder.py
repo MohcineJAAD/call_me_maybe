@@ -8,6 +8,8 @@ from llm_sdk import Small_LLM_Model
 
 from .models import FunctionCall, FunctionDef, PromptItem
 
+MAX_NUMBER_TOKENS = 20
+
 
 def build_prompt(request: str, functions: list[FunctionDef]) -> str:
     """Describe the functions, then start the JSON answer.
@@ -142,6 +144,48 @@ class Decoder(BaseModel):
             if best == end_id:
                 return written.decode()
             written += self.token_bytes[best]
+
+    def number_mask(self, written: str, end_id: int) -> np.ndarray:
+        """Return the tokens allowed next in a number.
+
+        Args:
+            written: The number written so far.
+            end_id: The token that ends the number ("," or "}").
+
+        Returns:
+            The mask of allowed tokens.
+        """
+        mask = self.digit_mask.copy()
+        if written == "":
+            mask[self.minus_id] = True
+        elif written == "-" or written.endswith("."):
+            return mask
+        elif "." in written:
+            mask[end_id] = True
+        else:
+            mask[end_id] = True
+            mask[self.dot_id] = True
+        return mask
+
+    def generate_number(self, ids: list[int], end_id: int) -> str:
+        """Let the model write a number; it ends by picking end_id.
+
+        Args:
+            ids: Everything written so far (extended in place).
+            end_id: The token that ends the number ("," or "}").
+
+        Returns:
+            The number as text, e.g. "-4" or "2.5".
+        """
+        written = ""
+        for _ in range(MAX_NUMBER_TOKENS):
+            best = self.pick(ids, self.number_mask(written, end_id))
+            ids.append(best)
+            if best == end_id:
+                return written
+            written += self.token_bytes[best].decode()
+        ids.append(end_id)
+        return written
 
 
 def load_decoder(llm: Small_LLM_Model) -> Decoder:
