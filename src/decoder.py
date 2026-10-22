@@ -9,6 +9,7 @@ from llm_sdk import Small_LLM_Model
 from .models import FunctionCall, FunctionDef, PromptItem
 
 MAX_NUMBER_TOKENS = 20
+MAX_STRING_TOKENS = 100
 
 
 def build_prompt(request: str, functions: list[FunctionDef]) -> str:
@@ -186,6 +187,29 @@ class Decoder(BaseModel):
             written += self.token_bytes[best].decode()
         ids.append(end_id)
         return written
+
+    def generate_string(self, ids: list[int]) -> str:
+        """Let the model write a string value; it ends by picking '"'.
+
+        Capped at MAX_STRING_TOKENS tokens so it can never loop forever.
+
+        Args:
+            ids: Everything written so far (extended in place).
+
+        Returns:
+            The string value.
+        """
+        mask = self.string_mask.copy()
+        mask[self.quote_id] = True
+        written = b""
+        for _ in range(MAX_STRING_TOKENS):
+            best = self.pick(ids, mask)
+            ids.append(best)
+            if best == self.quote_id:
+                return written.decode("utf-8", errors="replace")
+            written += self.token_bytes[best]
+        ids.append(self.quote_id)
+        return written.decode("utf-8", errors="replace")
 
 
 def load_decoder(llm: Small_LLM_Model) -> Decoder:
