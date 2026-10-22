@@ -3,6 +3,27 @@
 from .models import FunctionCall, FunctionDef, PromptItem
 
 
+def build_prompt(request: str, functions: list[FunctionDef]) -> str:
+    """Describe the functions, then start the JSON answer.
+
+    Args:
+        request: The natural-language prompt.
+        functions: The available functions.
+    Returns:
+        The text given to the model, ending where the function name starts.
+    """
+    lines = ["Choose the function that answers the request.", "Functions:"]
+    for fn in functions:
+        parts = []
+        for name, spec in fn.parameters.items():
+            parts.append(f"{name}: {spec.type}")
+        params = ", ".join(parts)
+        lines.append(f"- {fn.name}({params}): {fn.description}")
+    lines.append(f"Request: {request}")
+    lines.append('Answer: {"name": "')
+    return "\n".join(lines)
+
+
 def byte_decoder() -> dict[str, int]:
     """Map each character written in vocab.json back to its real byte.
 
