@@ -1,5 +1,10 @@
 """Turn prompts into function calls."""
 
+import numpy as np
+from pydantic import BaseModel, ConfigDict
+
+from llm_sdk import Small_LLM_Model
+
 from .models import FunctionCall, FunctionDef, PromptItem
 
 
@@ -49,6 +54,53 @@ def byte_decoder() -> dict[str, int]:
     return {
         chr(written_as[i]): real_bytes[i] for i in range(len(real_bytes))
     }
+
+
+class Decoder(BaseModel):
+    """Constrained decoder wrapping the language model.
+
+    It holds everything that never changes between prompts, so it is
+    built once and reused for every prompt.
+    """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    llm: Small_LLM_Model
+
+    def encode(self, text: str) -> list[int]:
+        """Encode a fixed piece of text into token IDs.
+
+        Args:
+            text: The fixed text.
+
+        Returns:
+            Its token IDs.
+        """
+        ids = self.llm.encode(text)[0].tolist()
+        return ids
+
+    def pick(self, ids: list[int], mask: np.ndarray) -> int:
+        """Return the best allowed token, calling the model only if needed.
+
+        Args:
+            ids: Everything written so far.
+            mask: True for each allowed token.
+
+        Returns:
+            The chosen token ID.
+
+        Raises:
+            RuntimeError: If no token is allowed (a bug in the rules).
+        """
+        allowed = np.flatnonzero(mask)
+        len_allowed = len(allowed)
+        if len_allowed == 0:
+            raise RuntimeError("decoder bug: no token allowed")
+        if len_allowed == 1:
+            return int(allowed[0])
+        logits = self.llm.get_logits_from_input_ids(ids)
+        size_mask = len(mask)
+        scores = np.full(len(logits), -np.inf)
+        scores[:size_mask] = np.where(mask, logits[:size_mask], -np.inf)
+        return int(np.argmax(scores))
 
 
 def decode(prompt: PromptItem, functions: list[FunctionDef]) -> FunctionCall:
