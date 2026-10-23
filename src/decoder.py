@@ -211,6 +211,41 @@ class Decoder(BaseModel):
         ids.append(self.quote_id)
         return written.decode("utf-8", errors="replace")
 
+    def generate_value(
+            self,
+            ids: list[int],
+            key: str,
+            kind: str,
+            end_id: int,
+            first: bool
+    ) -> str | float | int | bool:
+        """Write the key, then let the model fill a value of this type.
+
+        Args:
+            ids: Everything written so far (extended in place).
+            key: The parameter name, from the definition.
+            kind: The parameter type, from the definition.
+            end_id: "," if more parameters follow, "}" if last.
+            first: True for the first parameter (no space before it).
+
+        Returns:
+            The value, converted to its Python type.
+        """
+        space = "" if first else " "
+        if kind == "string":
+            ids += self.encode(f'{space}"{key}": "')
+            value = self.generate_string(ids)
+            ids.append(end_id)
+            return value
+        ids += self.encode(f'{space}"{key}":')
+        if kind == "boolean":
+            choice = self.generate_choice(ids, ["true", "false"], end_id)
+            return choice == "true"
+        text = self.generate_number(ids, end_id)
+        if kind == "integer":
+            return int(float(text))
+        return float(text)
+
 
 def load_decoder(llm: Small_LLM_Model) -> Decoder:
     """Build every lookup table once and return a ready decoder.
