@@ -28,6 +28,11 @@ def build_prompt(request: str, functions: list[FunctionDef]) -> str:
             parts.append(f"{name}: {spec.type}")
         params = ", ".join(parts)
         lines.append(f"- {fn.name}({params}): {fn.description}")
+    lines.append("Rules:")
+    lines.append("- Copy text values exactly as written in the request.")
+    lines.append("- A regex must match only what has to be replaced, "
+                 "with no extra groups or alternatives.")
+    lines.append("- A replacement is only the new text, with no extra spaces.")
     lines.append(f"Request: {request}")
     lines.append('Answer: {"name": "')
     return "\n".join(lines)
@@ -173,12 +178,16 @@ class Decoder(BaseModel):
             The chosen option.
         """
         targets = [option.encode() for option in options]
+        candidates = [
+            token_id for token_id, token in enumerate(self.token_bytes)
+            if token and any(token in t for t in targets)
+        ]
         written = b""
         while True:
             mask = np.zeros(len(self.token_bytes), dtype=bool)
-            for token_id, token in enumerate(self.token_bytes):
-                attempt = written + token
-                if token and any(t.startswith(attempt) for t in targets):
+            for token_id in candidates:
+                attempt = written + self.token_bytes[token_id]
+                if any(t.startswith(attempt) for t in targets):
                     mask[token_id] = True
             if written in targets:
                 mask[end_id] = True
