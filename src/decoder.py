@@ -9,7 +9,7 @@ from llm_sdk import Small_LLM_Model
 from .models import FunctionCall, FunctionDef, PromptItem
 
 MAX_NUMBER_TOKENS = 20
-MAX_STRING_TOKENS = 100
+STRING_TOKEN_MARGIN = 10
 
 
 def build_prompt(request: str, functions: list[FunctionDef]) -> str:
@@ -58,6 +58,48 @@ def byte_decoder() -> dict[str, int]:
     return {
         chr(written_as[i]): real_bytes[i] for i in range(len(real_bytes))
     }
+
+
+def unescape(raw: str) -> str:
+    """Interpret JSON escapes the model may write inside a string.
+
+    The model writes values inside a JSON string, so it may escape
+    them (a regex \\d becomes \\\\d). json.loads removes that escaping
+    once; if the text is not valid JSON string content, keep it as is.
+
+    Args:
+        raw: The text between the quotes, as written by the model.
+
+    Returns:
+        The real value.
+    """
+    try:
+        value = json.loads('"' + raw + '"')
+    except json.JSONDecodeError:
+        return raw
+    if isinstance(value, str):
+        return value
+    return raw
+
+
+def repeated_block(tokens: list[int]) -> int:
+    """Return how many tokens to remove if the last ones are a repeat.
+
+    One token three times in a row, or a block of 2 to 12 tokens twice
+    in a row, counts as a repeat.
+
+    Args:
+        tokens: The tokens written so far.
+
+    Returns:
+        The number of repeated tokens to remove, or 0 if none.
+    """
+    if len(tokens) >= 3 and tokens[-1] == tokens[-2] == tokens[-3]:
+        return 2
+    for n in range(2, 13):
+        if len(tokens) >= 2 * n and tokens[-n:] == tokens[-2 * n:-n]:
+            return n
+    return 0
 
 
 class Decoder(BaseModel):
@@ -188,28 +230,43 @@ class Decoder(BaseModel):
         ids.append(end_id)
         return written
 
-    def generate_string(self, ids: list[int]) -> str:
+    def generate_string(self, ids: list[int], request: str) -> str:
         """Let the model write a string value; it ends by picking '"'.
 
-        Capped at MAX_STRING_TOKENS tokens so it can never loop forever.
+        Stops early if the model starts a new line, or repeats text that
+        is not in the request. Capped at the request's length plus
+        STRING_TOKEN_MARGIN tokens, so it can never loop forever.
 
         Args:
             ids: Everything written so far (extended in place).
+            request: The user's request, to tell copying from looping.
 
         Returns:
             The string value.
         """
         mask = self.string_mask.copy()
         mask[self.quote_id] = True
-        written = b""
-        for _ in range(MAX_STRING_TOKENS):
+        request_bytes = request.encode()
+        cap = len(self.encode(request)) + STRING_TOKEN_MARGIN
+        chosen: list[int] = []
+        for _ in range(cap):
             best = self.pick(ids, mask)
-            ids.append(best)
             if best == self.quote_id:
-                return written.decode("utf-8", errors="replace")
-            written += self.token_bytes[best]
+                break
+            chosen.append(best)
+            ids.append(best)
+            so_far = b"".join(self.token_bytes[t] for t in chosen)
+            if b"\\n" in so_far:
+                break
+            n = repeated_block(chosen)
+            if n and so_far not in request_bytes:
+                del chosen[-n:]
+                del ids[-n:]
+                break
         ids.append(self.quote_id)
-        return written.decode("utf-8", errors="replace")
+        written = b"".join(self.token_bytes[t] for t in chosen)
+        written = written.split(b"\\n")[0]
+        return unescape(written.decode("utf-8", errors="replace"))
 
     def generate_value(
             self,
@@ -217,7 +274,8 @@ class Decoder(BaseModel):
             key: str,
             kind: str,
             end_id: int,
-            first: bool
+            first: bool,
+            request: str
     ) -> str | float | int | bool:
         """Write the key, then let the model fill a value of this type.
 
@@ -227,6 +285,7 @@ class Decoder(BaseModel):
             kind: The parameter type, from the definition.
             end_id: "," if more parameters follow, "}" if last.
             first: True for the first parameter (no space before it).
+            request: The user's request, passed to generate_string().
 
         Returns:
             The value, converted to its Python type.
@@ -234,7 +293,7 @@ class Decoder(BaseModel):
         space = "" if first else " "
         if kind == "string":
             ids += self.encode(f'{space}"{key}": "')
-            value = self.generate_string(ids)
+            value = self.generate_string(ids, request)
             ids.append(end_id)
             return value
         ids += self.encode(f'{space}"{key}":')
@@ -245,6 +304,41 @@ class Decoder(BaseModel):
         if kind == "integer":
             return int(float(text))
         return float(text)
+
+    def decode(
+            self,
+            item: PromptItem,
+            functions: list[FunctionDef]
+    ) -> FunctionCall:
+        """Turn one prompt into a valid function call.
+
+        Args:
+            item: The prompt.
+            functions: The available functions.
+
+        Returns:
+            The function call, with typed arguments.
+        """
+        ids = self.encode(build_prompt(item.prompt, functions))
+        names = [fn.name for fn in functions]
+        name = self.generate_choice(ids, names, self.quote_id)
+        fn = functions[names.index(name)]
+
+        ids += self.encode(', "parameters": {')
+        parameters: dict[str, str | float | int | bool] = {}
+        keys = list(fn.parameters)
+        for index, key in enumerate(keys):
+            last = index == len(keys) - 1
+            end_id = self.close_id if last else self.comma_id
+            kind = fn.parameters[key].type
+            parameters[key] = self.generate_value(
+                ids, key, kind, end_id, index == 0, item.prompt
+            )
+        return FunctionCall(
+            prompt=item.prompt,
+            name=name,
+            parameters=parameters
+        )
 
 
 def load_decoder(llm: Small_LLM_Model) -> Decoder:
@@ -290,13 +384,4 @@ def load_decoder(llm: Small_LLM_Model) -> Decoder:
         close_id=close_id,
         minus_id=minus_id,
         dot_id=dot_id
-    )
-
-
-def decode(prompt: PromptItem, functions: list[FunctionDef]) -> FunctionCall:
-    """Return a placeholder call (no LLM yet)."""
-    return FunctionCall(
-        prompt=prompt.prompt,
-        name=functions[0].name,
-        parameters={}
     )
