@@ -28,3 +28,9 @@ except OSError as e:
 except ValueError as e:
     print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)
+except KeyboardInterrupt:
+    print("\nInterrupted by user.", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"Unexpected error: {e}", file=sys.stderr)
+    sys.exit(1)

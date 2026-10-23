@@ -2,6 +2,7 @@
 
 import json
 import numpy as np
+from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict
 
 from llm_sdk import Small_LLM_Model
@@ -13,11 +14,15 @@ STRING_TOKEN_MARGIN = 10
 
 
 def build_prompt(request: str, functions: list[FunctionDef]) -> str:
-    """Describe the functions, then start the JSON answer.
+    """Write the request in the model's chat format, then start the answer.
+
+    Qwen3 is a chat model: it follows instructions best when they come
+    in the format it was trained on (system / user / assistant turns).
 
     Args:
         request: The natural-language prompt.
         functions: The available functions.
+
     Returns:
         The text given to the model, ending where the function name starts.
     """
@@ -30,12 +35,19 @@ def build_prompt(request: str, functions: list[FunctionDef]) -> str:
         lines.append(f"- {fn.name}({params}): {fn.description}")
     lines.append("Rules:")
     lines.append("- Copy text values exactly as written in the request.")
-    lines.append("- A regex must match only what has to be replaced, "
-                 "with no extra groups or alternatives.")
-    lines.append("- A replacement is only the new text, with no extra spaces.")
-    lines.append(f"Request: {request}")
-    lines.append('Answer: {"name": "')
-    return "\n".join(lines)
+    lines.append("- A regex is a general pattern that matches every part "
+                 "to replace (for example a character class), "
+                 "not a list of examples, and not the spaces around it.")
+    lines.append("- The function applies the replacement to each match "
+                 "separately, so the replacement is the text for one "
+                 "match only.")
+    system = "\n".join(lines)
+    return (
+        f"<|im_start|>system\n{system}<|im_end|>\n"
+        f"<|im_start|>user\n{request}<|im_end|>\n"
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        '{"name": "'
+    )
 
 
 def byte_decoder() -> dict[str, int]:
@@ -116,8 +128,10 @@ class Decoder(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     llm: Small_LLM_Model
     token_bytes: list[bytes]
-    digit_mask: np.ndarray
-    string_mask: np.ndarray
+    digit_mask: NDArray[np.bool_]
+    string_mask: NDArray[np.bool_]
+    space_mask: NDArray[np.bool_]
+    quote_start_mask: NDArray[np.bool_]
     quote_id: int
     comma_id: int
     close_id: int
@@ -136,7 +150,7 @@ class Decoder(BaseModel):
         ids = self.llm.encode(text)[0].tolist()
         return ids
 
-    def pick(self, ids: list[int], mask: np.ndarray) -> int:
+    def pick(self, ids: list[int], mask: NDArray[np.bool_]) -> int:
         """Return the best allowed token, calling the model only if needed.
 
         Args:
@@ -197,7 +211,7 @@ class Decoder(BaseModel):
                 return written.decode()
             written += self.token_bytes[best]
 
-    def number_mask(self, written: str, end_id: int) -> np.ndarray:
+    def number_mask(self, written: str, end_id: int) -> NDArray[np.bool_]:
         """Return the tokens allowed next in a number.
 
         Args:
@@ -253,14 +267,17 @@ class Decoder(BaseModel):
         Returns:
             The string value.
         """
-        mask = self.string_mask.copy()
-        mask[self.quote_id] = True
+        mask = self.string_mask | self.quote_start_mask
         request_bytes = request.encode()
         cap = len(self.encode(request)) + STRING_TOKEN_MARGIN
         chosen: list[int] = []
+        repeated = False
         for _ in range(cap):
-            best = self.pick(ids, mask)
-            if best == self.quote_id:
+            if chosen:
+                best = self.pick(ids, mask)
+            else:
+                best = self.pick(ids, mask & ~self.space_mask)
+            if self.quote_start_mask[best]:
                 break
             chosen.append(best)
             ids.append(best)
@@ -271,11 +288,15 @@ class Decoder(BaseModel):
             if n and so_far not in request_bytes:
                 del chosen[-n:]
                 del ids[-n:]
+                repeated = True
                 break
         ids.append(self.quote_id)
         written = b"".join(self.token_bytes[t] for t in chosen)
         written = written.split(b"\\n")[0]
-        return unescape(written.decode("utf-8", errors="replace"))
+        value = unescape(written.decode("utf-8", errors="replace"))
+        if repeated:
+            value = value.rstrip("|, ")
+        return value
 
     def generate_value(
             self,
@@ -367,6 +388,10 @@ def load_decoder(llm: Small_LLM_Model) -> Decoder:
     for written, token_id in vocab.items():
         token_bytes[token_id] = bytes([to_byte[c] for c in written])
     digit_mask = np.array([token.isdigit() for token in token_bytes])
+    space_mask = np.array([token.startswith(b" ") for token in token_bytes])
+    quote_start_mask = np.array(
+        [token.startswith(b'"') for token in token_bytes]
+    )
     allowed_in_string = []
     for token in token_bytes:
         if token == b"":
@@ -388,6 +413,8 @@ def load_decoder(llm: Small_LLM_Model) -> Decoder:
         token_bytes=token_bytes,
         digit_mask=digit_mask,
         string_mask=string_mask,
+        space_mask=space_mask,
+        quote_start_mask=quote_start_mask,
         quote_id=quote_id,
         comma_id=comma_id,
         close_id=close_id,
