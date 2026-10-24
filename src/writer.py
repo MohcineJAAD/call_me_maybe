@@ -17,5 +17,5 @@ def write_results(file_path: str, calls: list[FunctionCall]) -> None:
     if folder:
         os.makedirs(folder, exist_ok=True)
     data = [call.model_dump() for call in calls]
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)

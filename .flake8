@@ -1,2 +1,0 @@
-[flake8]
-extend-exclude = .venv, llm_sdk, scratch_nbr.py scratch.py scrtch.py c3.py

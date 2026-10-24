@@ -17,7 +17,7 @@ def read_json_list(file_path: str) -> list[Any]:
     Returns:
         the parsed list.
     """
-    with open(file_path) as f:
+    with open(file_path, encoding="utf-8") as f:
         try:
             data = json.load(f)
         except json.JSONDecodeError as e:

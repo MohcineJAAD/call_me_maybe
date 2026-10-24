@@ -1,14 +1,14 @@
-import sys
-import time
-
-from llm_sdk import Small_LLM_Model
-
-from .cli import parse_args
-from .decoder import load_decoder
-from .loader import load_prompts, load_functions
-from .writer import write_results
-
 try:
+    import sys
+    import time
+
+    from llm_sdk import Small_LLM_Model
+
+    from .cli import parse_args
+    from .decoder import load_decoder
+    from .loader import load_prompts, load_functions
+    from .writer import write_results
+
     config = parse_args()
     prompts = load_prompts(config.input)
     functions = load_functions(config.functions_definition)

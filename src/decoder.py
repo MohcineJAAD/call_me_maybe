@@ -7,10 +7,18 @@ from pydantic import BaseModel, ConfigDict
 
 from llm_sdk import Small_LLM_Model
 
-from .models import FunctionCall, FunctionDef, PromptItem
+from .models import FunctionCall, FunctionDef, PromptItem, TypeSpec
 
 MAX_NUMBER_TOKENS = 20
 STRING_TOKEN_MARGIN = 10
+NO_MATCH = FunctionDef(
+    name="fn_no_match",
+    description=(
+        "Use only when the request matches none of the other functions."
+    ),
+    parameters={},
+    returns=TypeSpec(type="string")
+)
 
 
 def build_prompt(request: str, functions: list[FunctionDef]) -> str:
@@ -147,7 +155,7 @@ class Decoder(BaseModel):
         Returns:
             Its token IDs.
         """
-        ids = self.llm.encode(text)[0].tolist()
+        ids: list[int] = self.llm.encode(text)[0].tolist()
         return ids
 
     def pick(self, ids: list[int], mask: NDArray[np.bool_]) -> int:
@@ -259,6 +267,7 @@ class Decoder(BaseModel):
         Stops early if the model starts a new line, or repeats text that
         is not in the request. Capped at the request's length plus
         STRING_TOKEN_MARGIN tokens, so it can never loop forever.
+        The chosen tokens are turned into text with the SDK's decode().
 
         Args:
             ids: Everything written so far (extended in place).
@@ -291,9 +300,9 @@ class Decoder(BaseModel):
                 repeated = True
                 break
         ids.append(self.quote_id)
-        written = b"".join(self.token_bytes[t] for t in chosen)
-        written = written.split(b"\\n")[0]
-        value = unescape(written.decode("utf-8", errors="replace"))
+        written = self.llm.decode(chosen)
+        written = written.split("\\n")[0]
+        value = unescape(written)
         if repeated:
             value = value.rstrip("|, ")
         return value
@@ -332,7 +341,9 @@ class Decoder(BaseModel):
             return choice == "true"
         text = self.generate_number(ids, end_id)
         if kind == "integer":
-            return int(float(text))
+            if "." in text:
+                return int(float(text))
+            return int(text)
         return float(text)
 
     def decode(
@@ -342,6 +353,9 @@ class Decoder(BaseModel):
     ) -> FunctionCall:
         """Turn one prompt into a valid function call.
 
+        The model chooses among the given functions plus NO_MATCH,
+        for requests that match none of them.
+
         Args:
             item: The prompt.
             functions: The available functions.
@@ -349,10 +363,11 @@ class Decoder(BaseModel):
         Returns:
             The function call, with typed arguments.
         """
-        ids = self.encode(build_prompt(item.prompt, functions))
-        names = [fn.name for fn in functions]
+        choices = functions + [NO_MATCH]
+        ids = self.encode(build_prompt(item.prompt, choices))
+        names = [fn.name for fn in choices]
         name = self.generate_choice(ids, names, self.quote_id)
-        fn = functions[names.index(name)]
+        fn = choices[names.index(name)]
 
         ids += self.encode(', "parameters": {')
         parameters: dict[str, str | float | int | bool] = {}
